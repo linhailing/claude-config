@@ -1,0 +1,208 @@
+#!/usr/bin/env bash
+
+set -uo pipefail
+
+PLUGIN_ROOT="${CLAUDE_PLUGIN_ROOT:-$HOME/.claude/plugins/claude-code-zh-cn}"
+MARKER_FILE="$PLUGIN_ROOT/.patched-version"
+LAUNCHER_BIN_DIR="$(cd "$(dirname "$0")" && pwd)"
+WARNING_PREFIX="[claude-code-zh-cn]"
+RESOLVER="$LAUNCHER_BIN_DIR/resolve-runtime.js"
+[ -f "$RESOLVER" ] || RESOLVER="$LAUNCHER_BIN_DIR/../scripts/resolve-runtime.js"
+if [ -f "$RESOLVER" ]; then
+    PLUGIN_ROOT="$(node "$RESOLVER")"
+fi
+if [ -n "$PLUGIN_ROOT" ] && [ "${ZH_CN_LAUNCHER_DISPATCHED:-}" != "1" ] && [ -f "$PLUGIN_ROOT/bin/claude-launcher" ]; then
+    exec env ZH_CN_LAUNCHER_DISPATCHED=1 ZH_CN_LAUNCHER_BIN_DIR="$LAUNCHER_BIN_DIR" bash "$PLUGIN_ROOT/bin/claude-launcher" "$@"
+fi
+LAUNCHER_BIN_DIR="${ZH_CN_LAUNCHER_BIN_DIR:-$LAUNCHER_BIN_DIR}"
+MARKER_FILE="$PLUGIN_ROOT/.patched-version"
+
+
+log_warning() {
+    printf "%s %s\n" "$WARNING_PREFIX" "$1" >&2
+}
+
+launcher_filtered_path() {
+    local filtered_path=""
+    local path_entry
+    local old_ifs="$IFS"
+
+    IFS=':'
+    for path_entry in ${PATH:-}; do
+        if [ "${path_entry:-}" = "$LAUNCHER_BIN_DIR" ]; then
+            continue
+        fi
+        if [ -z "$filtered_path" ]; then
+            filtered_path="$path_entry"
+        else
+            filtered_path="${filtered_path}:$path_entry"
+        fi
+    done
+    IFS="$old_ifs"
+
+    printf "%s" "$filtered_path"
+}
+
+find_real_claude_binary() {
+    if [ -n "${ZH_CN_REAL_CLAUDE:-}" ] && [ -x "${ZH_CN_REAL_CLAUDE:-}" ]; then
+        printf "%s" "$ZH_CN_REAL_CLAUDE"
+        return
+    fi
+
+    local filtered_path
+    filtered_path="$(launcher_filtered_path)"
+
+    PATH="$filtered_path" command -v claude 2>/dev/null || true
+}
+
+read_cli_version() {
+    node - "$1" <<'NODE'
+const fs = require("fs");
+const text = fs.readFileSync(process.argv[2], "utf8");
+const match = text.match(/^\/\/ Version: (.+)$/m);
+process.stdout.write(match ? match[1] : "");
+NODE
+}
+
+npm_cli_probe_residue() {
+    node - "$1" <<'NODE'
+const fs = require("fs");
+
+const cliFile = process.argv[2];
+const probes = [
+  "Quick safety check",
+  "This command requires approval",
+  "Use /btw to ask a quick side question without interrupting Claude's current work",
+];
+
+try {
+  const text = fs.readFileSync(cliFile, "utf8");
+  const residue = probes.filter((probe) => text.includes(probe));
+  if (residue.length > 0) {
+    process.stdout.write(residue.join(" | "));
+    process.exit(0);
+  }
+} catch {}
+
+process.exit(1);
+NODE
+}
+
+compute_current_marker() {
+    local cli_file="$1"
+    local current_version=""
+    local patch_revision=""
+    local marker=""
+
+    current_version="$(read_cli_version "$cli_file" 2>/dev/null || true)"
+    [ -n "$current_version" ] || return
+
+    if [ -f "$PLUGIN_ROOT/compute-patch-revision.sh" ]; then
+        # shellcheck disable=SC1090
+        source "$PLUGIN_ROOT/compute-patch-revision.sh"
+        patch_revision="$(compute_patch_revision "$PLUGIN_ROOT" 2>/dev/null || true)"
+    fi
+
+    marker="$current_version"
+    if [ -n "$patch_revision" ]; then
+        marker="${marker}|${patch_revision}"
+    fi
+    printf "%s" "$marker"
+}
+
+detect_installation() {
+    local claude_bin="$1"
+    if [ -z "$claude_bin" ] || [ ! -f "$PLUGIN_ROOT/bun-binary-io.js" ]; then
+        return
+    fi
+    node "$PLUGIN_ROOT/bun-binary-io.js" detect "$claude_bin" 2>/dev/null || true
+}
+
+maybe_patch_npm_cli() {
+    local cli_file="$1"
+    local current_marker="$2"
+    local patched_marker=""
+    local patch_output=""
+    local residue=""
+    local status_file=""
+    local patch_status=""
+
+    if [ -f "$MARKER_FILE" ]; then
+        IFS= read -r patched_marker < "$MARKER_FILE" || true
+    fi
+
+    if [ "$current_marker" = "$patched_marker" ]; then
+        if ! residue="$(npm_cli_probe_residue "$cli_file")"; then
+            return
+        fi
+    fi
+
+    if [ ! -x "$PLUGIN_ROOT/patch-cli.sh" ]; then
+        log_warning "prelaunch patch helper is missing; continuing with original Claude Code"
+        return
+    fi
+
+    # 备份/恢复/语法校验/失败回滚统一由 patch-cli.js 托管（--backup 模式）；
+    # 任何失败都只是保持英文可用，不阻塞启动。
+    status_file="${TMPDIR:-/tmp}/cczh-patch-status.$$.${RANDOM:-0}"
+    if ! patch_output="$("$PLUGIN_ROOT/patch-cli.sh" "$cli_file" \
+        --backup "${cli_file}.zh-cn-backup" \
+        --status "$status_file" 2>/dev/null)"; then
+        rm -f "$status_file"
+        log_warning "prelaunch patch failed; continuing with original Claude Code"
+        return
+    fi
+    patch_status="$(cat "$status_file" 2>/dev/null || echo "error")"
+    rm -f "$status_file"
+
+    case "$patch_status" in
+        ok|noop)
+            printf "%s\n" "$current_marker" > "$MARKER_FILE"
+            ;;
+        partial)
+            log_warning "prelaunch patch applied partially (some English remains for this Claude Code version); continuing"
+            ;;
+        *)
+            log_warning "prelaunch patch skipped (status: $patch_status, see plugin patch.log); continuing with original Claude Code"
+            ;;
+    esac
+}
+
+main() {
+    local real_claude=""
+    local filtered_path=""
+    local install_info=""
+    local install_kind=""
+    local install_target=""
+    local current_marker=""
+    local language_mode=""
+
+    real_claude="$(find_real_claude_binary)"
+    if [ -z "$real_claude" ]; then
+        log_warning "real claude executable not found"
+        exit 127
+    fi
+
+    install_info="$(detect_installation "$real_claude")"
+    install_kind="${install_info%%:*}"
+    install_target="${install_info#*:}"
+    if [ -f "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/plugins/claude-code-zh-cn/.language-mode" ]; then
+        read -r language_mode < "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/plugins/claude-code-zh-cn/.language-mode" || true
+    fi
+
+    if [ "$install_kind" = "native-bun" ] && [ -n "$PLUGIN_ROOT" ]; then
+        node "$PLUGIN_ROOT/scripts/native-repair.js" "$install_target" "${CLAUDE_PLUGIN_DATA:-$HOME/.claude/plugins/claude-code-zh-cn}" >/dev/null || true
+    fi
+
+    if [ "$language_mode" != "en" ] && [ "$install_kind" = "npm" ] && [ -f "$install_target" ]; then
+        current_marker="$(compute_current_marker "$install_target" 2>/dev/null || true)"
+        if [ -n "$current_marker" ]; then
+            maybe_patch_npm_cli "$install_target" "$current_marker"
+        fi
+    fi
+
+    filtered_path="$(launcher_filtered_path)"
+    exec env PATH="$filtered_path" ZH_CN_REAL_CLAUDE="$real_claude" "$real_claude" "$@"
+}
+
+main "$@"

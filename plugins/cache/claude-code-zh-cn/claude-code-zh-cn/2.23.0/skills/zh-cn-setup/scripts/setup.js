@@ -1,0 +1,469 @@
+#!/usr/bin/env node
+
+// plugin/skills/zh-cn-setup/scripts/setup.js
+//
+// 跨平台（macOS / Linux / Windows）首次增强安装脚本。
+// 由 zh-cn-setup skill 调用，也可被用户手动运行：
+//   node ~/.claude/plugins/.../skills/zh-cn-setup/scripts/setup.js
+//
+// 职责（只做"装插件本身不会自动完成"的步骤）：
+//   1. 从插件内置 verbs/tips/settings-overlay 构建 overlay，合并进 ~/.claude/settings.json
+//      （只补齐缺失项，并迁移废弃的 spinnerVerbs 数组；带备份 + 原子写）
+//   2. 检测 CC Switch 通用配置，必要时引导用户授权同步（非交互时只输出手动步骤）
+//   3. 报告 patch 状态，提示是否需要重启
+//
+// 不做的事（避免循环依赖 / 重复维护）：
+//   - 不调 claude plugin install/update（插件本体由用户或 plugin manager 管）
+//   - 不手动 CLI patch（由 session-start hook 自动维护）
+
+"use strict";
+
+const fs = require("node:fs");
+const path = require("node:path");
+const os = require("node:os");
+const { spawnSync } = require("node:child_process");
+
+const {
+  buildOverlay,
+  deepMerge,
+  fillMissingKeys,
+  writeSettings,
+  resolvePluginRoot,
+} = require(path.join(__dirname, "..", "..", "..", "scripts", "build-overlay.js"));
+
+function homeDir() {
+  return process.env.HOME || process.env.USERPROFILE || os.homedir();
+}
+
+function settingsFile() {
+  return path.join(homeDir(), ".claude", "settings.json");
+}
+
+function readJson(file, fallback) {
+  try {
+    return JSON.parse(fs.readFileSync(file, "utf8").replace(/^\uFEFF/, ""));
+  } catch {
+    return fallback;
+  }
+}
+
+function isPlainObject(value) {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function spinnerVerbCount(value) {
+  if (Array.isArray(value)) return value.length;
+  return isPlainObject(value) && Array.isArray(value.verbs) ? value.verbs.length : 0;
+}
+
+function backupSettings(settingsPath) {
+  try {
+    const stamp = new Date()
+      .toISOString()
+      .replace(/[-:]/g, "")
+      .replace(/\..+/, "")
+      .replace("T", "");
+    const backup = `${settingsPath}.zh-cn-backup.${stamp}`;
+    if (fs.existsSync(settingsPath)) {
+      fs.copyFileSync(settingsPath, backup);
+      return backup;
+    }
+  } catch {
+    // 备份失败不阻塞，但返回 null
+  }
+  return null;
+}
+
+// ---- CC Switch 同步 ----
+
+function ccSwitchDbPath() {
+  return path.join(homeDir(), ".cc-switch", "cc-switch.db");
+}
+
+function nodeSqlite() {
+  try {
+    return require("node:sqlite").DatabaseSync;
+  } catch {
+    return null;
+  }
+}
+
+function sqlite3Available() {
+  if (nodeSqlite()) return true;
+  const result = spawnSync("sqlite3", ["--version"], { encoding: "utf8", windowsHide: true });
+  return result.status === 0;
+}
+
+function ccSwitchReadCommonConfig(dbFile) {
+  const DatabaseSync = nodeSqlite();
+  if (DatabaseSync) {
+    try {
+      const db = new DatabaseSync(dbFile, { readOnly: true });
+      try {
+        const row = db.prepare("select value from settings where key='common_config_claude'").get();
+        return row ? String(row.value || "") : "";
+      } finally {
+        db.close();
+      }
+    } catch {
+      return null;
+    }
+  }
+  const result = spawnSync("sqlite3", [dbFile, "select value from settings where key='common_config_claude';"], {
+    encoding: "utf8",
+    windowsHide: true,
+  });
+  if (result.status !== 0) return null;
+  const raw = (result.stdout || "").trim();
+  return raw ? raw : "";
+}
+
+function ccSwitchConfigStatus(currentRaw, overlay) {
+  // 与 install.ps1 JS_CCSWITCH_STATUS 同款判定
+  const current = (() => {
+    try {
+      const v = JSON.parse((currentRaw || "").replace(/^\uFEFF/, ""));
+      return isPlainObject(v) ? v : null;
+    } catch {
+      return null;
+    }
+  })();
+
+  if (!current) return "invalid";
+
+  const verbCount = spinnerVerbCount(current.spinnerVerbs);
+  const tipCount = isPlainObject(current.spinnerTipsOverride) && Array.isArray(current.spinnerTipsOverride.tips)
+    ? current.spinnerTipsOverride.tips.length
+    : 0;
+
+  const ok =
+    current.language === "Chinese" &&
+    current.spinnerTipsEnabled === true &&
+    verbCount >= 100 &&
+    tipCount >= 40;
+  return ok ? "ok" : "needs-sync";
+}
+
+function syncCcSwitch(dbFile, overlay) {
+  // 备份 → 合并 → 写入 common_config_claude（事务）
+  const stamp = new Date()
+    .toISOString()
+    .replace(/[-:]/g, "")
+    .replace(/\..+/, "")
+    .replace("T", "");
+  const backup = `${dbFile}.zh-cn-backup.${stamp}`;
+  try {
+    fs.copyFileSync(dbFile, backup);
+  } catch {
+    return { ok: false, reason: "无法备份数据库" };
+  }
+
+  function mergeCurrent(raw) {
+    const current = JSON.parse((raw || "").replace(/^\uFEFF/, ""));
+    if (!isPlainObject(current)) throw new Error("通用配置不是有效 JSON 对象，未写入");
+    return JSON.stringify(deepMerge(current, overlay), null, 2);
+  }
+  const DatabaseSync = nodeSqlite();
+  if (DatabaseSync) {
+    try {
+      const db = new DatabaseSync(dbFile);
+      try {
+        db.exec("begin immediate");
+        const row = db.prepare("select value from settings where key=?").get("common_config_claude");
+        const mergedJson = mergeCurrent(row?.value);
+        db.prepare("insert or replace into settings(key,value) values(?, ?)")
+          .run("common_config_claude", mergedJson);
+        db.prepare("delete from settings where key=?")
+          .run("common_config_claude_cleared");
+        db.exec("commit");
+        return { ok: true, backup };
+      } catch (error) {
+        try { db.exec("rollback"); } catch {}
+        return { ok: false, reason: error.message || "写入失败", backup };
+      } finally {
+        db.close();
+      }
+    } catch (error) {
+      return { ok: false, reason: error.message || "无法打开数据库", backup };
+    }
+  }
+
+  // sqlite3 CLI 兼容路径：把合并后的 JSON 写到临时文件，用 readfile() 读入
+  let mergedDir;
+  try {
+    mergedDir = fs.mkdtempSync(path.join(os.tmpdir(), "cczh-ccswitch-"));
+    const mergedFile = path.join(mergedDir, "merged.json");
+    const mergedJson = mergeCurrent(ccSwitchReadCommonConfig(dbFile));
+    fs.writeFileSync(mergedFile, mergedJson, { mode: 0o600 });
+    const escaped = mergedFile.replace(/'/g, "''");
+    const sql = `begin immediate; insert or replace into settings(key,value) values('common_config_claude', CAST(readfile('${escaped}') AS TEXT)); delete from settings where key='common_config_claude_cleared'; commit;`;
+    const result = spawnSync("sqlite3", [dbFile, sql], { encoding: "utf8", windowsHide: true });
+    if (result.status !== 0) {
+      return { ok: false, reason: "写入失败", backup };
+    }
+    return { ok: true, backup };
+  } catch (error) {
+    return { ok: false, reason: error.message || "同步失败", backup };
+  } finally {
+    try {
+      if (mergedDir) fs.rmSync(mergedDir, { recursive: true, force: true });
+    } catch {
+      // ignore
+    }
+  }
+}
+
+// ---- patch 状态报告 ----
+
+function installerSourceCandidates(pluginRoot, home = homeDir()) {
+  const candidates = [];
+  let current = path.resolve(pluginRoot);
+  for (let depth = 0; depth < 6; depth += 1) {
+    candidates.push(current);
+    const parent = path.dirname(current);
+    if (parent === current) break;
+    current = parent;
+  }
+
+  const pluginsRoot = path.join(home, ".claude", "plugins");
+  const knownMarketplaces = readJson(path.join(pluginsRoot, "known_marketplaces.json"), {});
+  for (const [name, marketplace] of Object.entries(knownMarketplaces)) {
+    const repo = marketplace?.source?.repo;
+    const isZhCnMarketplace =
+      name === "claude-code-zh-cn" ||
+      name === "taekchef" ||
+      (typeof repo === "string" && repo.toLowerCase().endsWith("/claude-code-zh-cn"));
+    const configured = marketplace?.installLocation;
+    if (isZhCnMarketplace && typeof configured === "string" && configured.trim()) {
+      candidates.push(configured);
+    }
+  }
+  candidates.push(path.join(pluginsRoot, "marketplaces", "claude-code-zh-cn"));
+  candidates.push(path.join(pluginsRoot, "marketplaces", "taekchef"));
+
+  return [...new Set(candidates.map((candidate) => path.resolve(candidate)))];
+}
+
+function resolveInstallerEntry(pluginRoot, platform = process.platform, home = homeDir()) {
+  const isWindows = platform === "win32";
+  const installer = isWindows ? "install.ps1" : "install.sh";
+  const payload = isWindows ? path.join("plugin", "patch-cli.js") : path.join("plugin", "patch-cli.sh");
+
+  for (const sourceRoot of installerSourceCandidates(pluginRoot, home)) {
+    const entry = path.join(sourceRoot, installer);
+    if (fs.existsSync(entry) && fs.existsSync(path.join(sourceRoot, payload))) {
+      return entry;
+    }
+  }
+  return null;
+}
+
+function quotePowerShellArgument(value) {
+  return `'${String(value).replace(/'/g, "''")}'`;
+}
+
+function quotePosixArgument(value) {
+  return "'" + String(value).replace(/'/g, "'\\''") + "'";
+}
+
+function reportPatchStatus(pluginRoot, platform = process.platform, options = {}) {
+  // session-start hook 把 patch marker 写在 STATE_ROOT/.patched-version
+  // 这里只做只读提示，不手动 patch
+  const stateRoot = process.env.CLAUDE_PLUGIN_DATA || process.env.CLAUDE_PLUGIN_ROOT || pluginRoot;
+  const markerFile = path.join(stateRoot, ".patched-version");
+  const marker = fs.existsSync(markerFile) ? fs.readFileSync(markerFile, "utf8").trim() : "";
+  const isWindows = platform === "win32";
+  const home = options.home || homeDir();
+  const installerEntry = resolveInstallerEntry(pluginRoot, platform, home);
+
+  const lines = [];
+  if (marker) {
+    lines.push(`✓ 已检测到 CLI patch 标记：${marker.split("|")[0]}`);
+    if (isWindows) {
+      lines.push("  （Windows native 不能在运行中热改 exe；Claude Code 更新后需退出全部窗口，再从源码目录重跑 install.ps1 -UpdateOnly）");
+    } else {
+      lines.push("  （CLI patch 由 session-start hook 自动维护；Claude Code 更新后会自动重新 patch）");
+    }
+  } else {
+    lines.push("ℹ 暂未检测到 CLI patch 标记。这通常表示：");
+    lines.push("  - 当前 Claude Code 版本暂不在已验证窗口内（会走 provisional 本机自检），或");
+    if (isWindows) {
+      lines.push("  - Windows native 需手动触发：退出全部 Claude Code 窗口后，从插件源码目录运行 install.ps1 -UpdateOnly");
+    } else {
+      lines.push("  - patch 将在下次会话启动时由 hook 自动尝试");
+    }
+  }
+  lines.push("");
+  if (isWindows) {
+    lines.push("如界面仍为英文（Windows）：请完全退出所有 Claude Code 窗口，然后运行：");
+    if (installerEntry) {
+      // install.ps1 基于 $PSScriptRoot 解析路径，与当前目录无关；
+      // 拆成 Set-Location + .\install.ps1 两行，既便于复制，也避免长路径里扩展名被截断（.ps1 误写为 .ps 会触发 PS 报错）。
+      lines.push(`  Set-Location ${quotePowerShellArgument(path.dirname(installerEntry))}`);
+      lines.push(`  powershell -NoProfile -ExecutionPolicy Bypass -File .\\install.ps1 -UpdateOnly`);
+      lines.push("  注意：-File 指向的必须是 install.ps1（末尾的 1 不能漏），否则 PowerShell 会报「file does not have a '.ps1' extension」。");
+    } else {
+      const cloneRoot = path.join(home, "claude-code-zh-cn");
+      lines.push("! 未找到包含 install.ps1 的 marketplace 源码目录。");
+      lines.push("  请先获取完整源码，再运行安装入口（以下命令只下载，不自动执行远程脚本）：");
+      lines.push(`  git clone https://github.com/taekchef/claude-code-zh-cn.git ${quotePowerShellArgument(cloneRoot)}`);
+      lines.push(`  Set-Location ${quotePowerShellArgument(cloneRoot)}`);
+      lines.push(`  powershell -NoProfile -ExecutionPolicy Bypass -File .\\install.ps1 -UpdateOnly`);
+      lines.push("  注意：-File 指向的必须是 install.ps1（末尾的 1 不能漏），否则 PowerShell 会报「file does not have a '.ps1' extension」。");
+    }
+  } else {
+    lines.push("如界面仍为英文，请完全退出所有 Claude Code 窗口后重新打开（让 hook 重新 patch）。");
+    if (installerEntry) {
+      lines.push("如 hook 仍无法修复，可运行完整源码中的安装入口：");
+      lines.push(`  bash ${quotePosixArgument(installerEntry)} --update-only`);
+    }
+  }
+  return lines.join("\n");
+}
+
+function reportSkillTranslation(pluginRoot) {
+  const root = path.join(homeDir(), ".claude");
+  const script = path.join(pluginRoot, "skill-i18n", "translate-skills.sh");
+  const extraRoots = process.env.ZH_CN_SKILL_I18N_EXTRA_ROOTS || "";
+  const lines = ["--- Skill 描述汉化 ---"];
+  if (!fs.existsSync(script)) {
+    lines.push("! 当前插件包缺少 skill-i18n 入口，已跳过。");
+    return lines.join("\n");
+  }
+  lines.push("Skill 描述同时用于界面显示和自动触发，因此不会在未授权时静默改写。");
+  if (extraRoots) lines.push(`额外扫描根：${extraRoots}`);
+  lines.push("先只读扫描：");
+  lines.push(`  bash "${script}" --root "${root}" --dry-run`);
+  lines.push("确认后立即翻译：");
+  lines.push(`  bash "${script}" --root "${root}"`);
+  lines.push("如 skill 由 CC Switch 管理且不在 ~/.claude 下，请先设置 ZH_CN_SKILL_I18N_EXTRA_ROOTS 为其真实目录。");
+  lines.push("翻译后可在 Claude Code 中运行 /reload-plugins；若仍未刷新，请完全退出后重开。");
+  return lines.join("\n");
+}
+
+function reportCcSwitchSkillDescriptions(pluginRoot) {
+  const dbFile = ccSwitchDbPath();
+  const lines = ["--- CC Switch skill 描述汉化 ---"];
+  if (!fs.existsSync(dbFile)) {
+    lines.push("未检测到 CC Switch 数据库，已跳过。");
+    return lines.join("\n");
+  }
+  let plan;
+  try {
+    const { buildSyncPlan } = require("./cc-switch-descriptions.js");
+    plan = buildSyncPlan(dbFile, path.join(path.dirname(dbFile), "skills"));
+  } catch (error) {
+    lines.push(`! 无法读取 CC Switch 数据库：${error.message}`);
+    lines.push("  如需汉化 skill 描述，可在终端手动运行 cc-switch-descriptions.js。");
+    return lines.join("\n");
+  }
+  if (plan.missingDb || plan.update.length === 0) {
+    lines.push("skill 描述已全部为中文，无需同步。");
+    return lines.join("\n");
+  }
+  lines.push(`检测到 ${plan.update.length} 条 skill 描述仍为英文（${plan.update.map((r) => r.name).join("、")}），对应 SKILL.md 已翻译为中文。`);
+  lines.push("写 CC Switch 数据库属于高风险操作，需要你主动授权运行：");
+  const script = path.join(pluginRoot, "skills", "zh-cn-setup", "scripts", "cc-switch-descriptions.js");
+  lines.push(`  先只读预览：node "${script}"`);
+  lines.push(`  确认后写入（会先备份数据库）：node "${script}" --apply`);
+  lines.push("  还原：用 --apply 输出的备份文件覆盖 cc-switch.db（需先退出 CC Switch 与 Claude Code）");
+  return lines.join("\n");
+}
+
+// ---- 主流程 ----
+
+function main() {
+  const pluginRoot = resolvePluginRoot();
+  const settingsPath = settingsFile();
+
+  console.log("claude-code-zh-cn 增强安装\n");
+
+  // 1. 合并 settings
+  const overlay = buildOverlay(pluginRoot);
+  const verbCount = spinnerVerbCount(overlay.spinnerVerbs);
+  const tipCount = overlay.spinnerTipsOverride?.tips?.length || 0;
+  console.log(`已从插件内置数据构建 overlay：${verbCount} 个动词、${tipCount} 条提示`);
+
+  fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
+  const current = isPlainObject(readJson(settingsPath, null)) ? readJson(settingsPath, {}) : {};
+  const { changed, merged } = fillMissingKeys(settingsPath, overlay);
+
+  if (changed) {
+    const backup = backupSettings(settingsPath);
+    if (backup) console.log(`已备份 settings.json → ${backup}`);
+    writeSettings(settingsPath, merged);
+    console.log("✓ 已补齐 settings.json 中缺失的中文配置（未覆盖你已有的设置）");
+  } else {
+    console.log("✓ settings.json 已包含完整中文配置，无需修改");
+  }
+
+  // 2. CC Switch 同步
+  const dbFile = ccSwitchDbPath();
+  if (fs.existsSync(dbFile)) {
+    if (!sqlite3Available()) {
+      console.log("\n! 检测到 CC Switch，但系统未安装 sqlite3，无法自动同步通用配置。");
+      console.log("  请手动在 CC Switch 的 Claude 通用配置里加入 language=Chinese、spinnerTipsEnabled=true 等。");
+    } else {
+      const currentRaw = ccSwitchReadCommonConfig(dbFile);
+      if (currentRaw === null) {
+        console.log("\n! 检测到 CC Switch，但无法读取通用配置表，已跳过自动同步。");
+      } else {
+        const status = ccSwitchConfigStatus(currentRaw, overlay);
+        if (status === "ok") {
+          console.log("\n✓ CC Switch 通用配置已是最新，无需同步");
+        } else if (status === "invalid") {
+          console.log("\n! 检测到 CC Switch，但通用配置不是有效 JSON，已跳过自动同步。");
+        } else {
+          // needs-sync
+          const choice = process.env.ZH_CN_CCSWITCH_SYNC;
+          if (choice === "1" || choice === "true" || choice === "yes") {
+            const result = syncCcSwitch(dbFile, overlay);
+            if (result.ok) {
+              console.log("\n✓ 已在授权后同步 CC Switch 通用配置");
+              if (result.backup) console.log(`  备份 → ${result.backup}`);
+            } else {
+              console.log(`\n! CC Switch 同步失败：${result.reason || "未知错误"}`);
+              if (result.backup) console.log(`  同步前备份已保留：${result.backup}`);
+            }
+          } else {
+            console.log("\n! 检测到 CC Switch 通用配置缺少中文设置。");
+            console.log("  如需授权自动同步（会先备份数据库），重新运行并设置环境变量：");
+            console.log("    macOS/Linux: ZH_CN_CCSWITCH_SYNC=1 node .../setup.js");
+            console.log("    Windows:     set ZH_CN_CCSWITCH_SYNC=1 && node ...\\setup.js");
+            console.log("  否则请手动在 CC Switch 的 Claude 通用配置中加入中文设置。");
+          }
+        }
+      }
+    }
+  }
+
+  // 3. patch 状态
+  console.log("\n--- CLI patch 状态 ---");
+  console.log(reportPatchStatus(pluginRoot));
+  console.log(`\n${reportSkillTranslation(pluginRoot)}`);
+  console.log(`\n${reportCcSwitchSkillDescriptions(pluginRoot)}`);
+
+  console.log("\n增强安装完成。");
+}
+
+if (require.main === module) {
+  try {
+    main();
+  } catch (error) {
+    console.error(`\nsetup 失败：${error.message}`);
+    process.exit(1);
+  }
+}
+
+module.exports = {
+  buildOverlay,
+  fillMissingKeys,
+  ccSwitchConfigStatus,
+  syncCcSwitch,
+  reportPatchStatus,
+  resolveInstallerEntry,
+  reportSkillTranslation,
+  reportCcSwitchSkillDescriptions,
+  settingsFile,
+  ccSwitchDbPath,
+};

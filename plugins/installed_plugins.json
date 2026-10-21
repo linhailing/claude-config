@@ -1,0 +1,15 @@
+{
+  "version": 2,
+  "plugins": {
+    "claude-code-zh-cn@claude-code-zh-cn": [
+      {
+        "scope": "user",
+        "installPath": "C:\\Users\\haili\\.claude\\plugins\\cache\\claude-code-zh-cn\\claude-code-zh-cn\\2.23.0",
+        "version": "2.23.0",
+        "installedAt": "2026-10-19T02:50:24.673Z",
+        "lastUpdated": "2026-10-19T02:50:24.673Z",
+        "gitCommitSha": "54551cd2423fb83488e29866064574805ac55d7c"
+      }
+    ]
+  }
+}
