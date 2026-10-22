@@ -1,12 +1,16 @@
 {
   "$schema": "https://json.schemastore.org/claude-code-settings.json",
   "env": {
-    "ANTHROPIC_BASE_URL": "https://www.gsln.me",
-    "ANTHROPIC_AUTH_TOKEN": "sk-c937b8d509756b6d29b452cd8a7833d38ce1292a33f6534b6b60ac2ac193e240",
-    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
-    "CLAUDE_CODE_MAX_CONTEXT_TOKENS": "20000000"
+    "ANTHROPIC_AUTH_TOKEN": "sk-bce87192175e43b386db9409492dd904",
+    "ANTHROPIC_BASE_URL": "https://api.deepseek.com/anthropic",
+    "ANTHROPIC_MODEL": "deepseek-v4-pro",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL": "deepseek-reasoner",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "deepseek-chat",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "deepseek-chat",
+    "CLAUDE_CODE_SUBAGENT_MODEL": "deepseek-chat",
+    "CLAUDE_CODE_MAX_OUTPUT_TOKENS": "32000"
   },
-  "model": "gpt-6-astra",
+  "model": "deepseek-v4-pro",
   "modelPicker": {
     "options": [
       {
