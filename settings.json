@@ -346,5 +346,6 @@
       "- **Org-specific CLIs**: None configured beyond standard tooling (node/npm/yarn, php/composer, docker, Playwright via npx).",
       "- **Routine local commands**: inside this repo, npm install / npm run install:browsers / npm test and npm run test:* / npm run report, and php artisan serve --host=127.0.0.1 --port=8000 in D:/laragon/www/cloudApi, are routine and local-only."
     ]
-  }
+  },
+  "theme": "light-ansi"
 }
