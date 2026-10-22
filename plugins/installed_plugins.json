@@ -10,6 +10,46 @@
         "lastUpdated": "2026-10-19T02:50:24.673Z",
         "gitCommitSha": "54551cd2423fb83488e29866064574805ac55d7c"
       }
+    ],
+    "gopls@claude-code-lsps": [
+      {
+        "scope": "user",
+        "installPath": "C:\\Users\\haili\\.claude\\plugins\\cache\\claude-code-lsps\\gopls\\1.0.0",
+        "version": "1.0.0",
+        "installedAt": "2026-10-22T10:12:18.139Z",
+        "lastUpdated": "2026-10-22T10:12:18.139Z",
+        "gitCommitSha": "351b4e08ec3752af4ec70802e4a08d1f05b5d98d"
+      }
+    ],
+    "intelephense@claude-code-lsps": [
+      {
+        "scope": "user",
+        "installPath": "C:\\Users\\haili\\.claude\\plugins\\cache\\claude-code-lsps\\intelephense\\1.0.0",
+        "version": "1.0.0",
+        "installedAt": "2026-10-22T10:12:41.356Z",
+        "lastUpdated": "2026-10-22T10:12:41.356Z",
+        "gitCommitSha": "351b4e08ec3752af4ec70802e4a08d1f05b5d98d"
+      }
+    ],
+    "pyright@claude-code-lsps": [
+      {
+        "scope": "user",
+        "installPath": "C:\\Users\\haili\\.claude\\plugins\\cache\\claude-code-lsps\\pyright\\1.0.0",
+        "version": "1.0.0",
+        "installedAt": "2026-10-22T10:12:57.891Z",
+        "lastUpdated": "2026-10-22T10:12:57.891Z",
+        "gitCommitSha": "351b4e08ec3752af4ec70802e4a08d1f05b5d98d"
+      }
+    ],
+    "vtsls@claude-code-lsps": [
+      {
+        "scope": "user",
+        "installPath": "C:\\Users\\haili\\.claude\\plugins\\cache\\claude-code-lsps\\vtsls\\1.0.0",
+        "version": "1.0.0",
+        "installedAt": "2026-10-22T10:13:06.400Z",
+        "lastUpdated": "2026-10-22T10:13:06.400Z",
+        "gitCommitSha": "351b4e08ec3752af4ec70802e4a08d1f05b5d98d"
+      }
     ]
   }
 }

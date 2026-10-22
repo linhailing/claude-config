@@ -5,6 +5,14 @@
       "repo": "taekchef/claude-code-zh-cn"
     },
     "installLocation": "C:\\Users\\haili\\.claude\\plugins\\marketplaces\\claude-code-zh-cn",
-    "lastUpdated": "2026-10-22T00:41:30.424Z"
+    "lastUpdated": "2026-10-22T06:47:07.194Z"
+  },
+  "claude-code-lsps": {
+    "source": {
+      "source": "directory",
+      "path": "C:\\Users\\haili\\.claude\\local-marketplaces\\claude-code-lsps"
+    },
+    "installLocation": "C:\\Users\\haili\\.claude\\local-marketplaces\\claude-code-lsps",
+    "lastUpdated": "2026-10-22T10:12:04.684Z"
   }
 }

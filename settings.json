@@ -44,13 +44,23 @@
     ]
   },
   "enabledPlugins": {
-    "claude-code-zh-cn@claude-code-zh-cn": true
+    "claude-code-zh-cn@claude-code-zh-cn": true,
+    "gopls@claude-code-lsps": true,
+    "intelephense@claude-code-lsps": true,
+    "pyright@claude-code-lsps": true,
+    "vtsls@claude-code-lsps": true
   },
   "extraKnownMarketplaces": {
     "claude-code-zh-cn": {
       "source": {
         "source": "github",
         "repo": "taekchef/claude-code-zh-cn"
+      }
+    },
+    "claude-code-lsps": {
+      "source": {
+        "source": "directory",
+        "path": "C:\\Users\\haili\\.claude\\local-marketplaces\\claude-code-lsps"
       }
     }
   },
@@ -294,5 +304,47 @@
       "使用 /feedback 帮助我们改进！"
     ]
   },
-  "tui": "fullscreen"
+  "tui": "fullscreen",
+  "autoMode": {
+    "allow": [
+      "$defaults",
+      "Bash(npm test:*)",
+      "Bash(npm run test:*:*)",
+      "Bash(npm run install:browsers)",
+      "Bash(npx playwright:*)",
+      "Bash(php artisan serve --host=127.0.0.1 --port=8000)"
+    ],
+    "soft_deny": [
+      "$defaults",
+      "Bash(npm publish:*)",
+      "Bash(npm run build:prod*)"
+    ],
+    "environment": [
+      "### Org-wide",
+      "- **Organization**: 掌客多 (zkeduo) — inferred from the origin remote at codeup.aliyun.com/zkeduo; treat this as the only org namespace in scope.",
+      "- **Cloud provider(s)**: Alibaba Cloud (Codeup-hosted source control via codeup.aliyun.com); no other cloud provider evidence in this repo.",
+      "- **Repository visibility**: unverified — the gh check was not queryable for a codeup.aliyun.com remote; treat this repo and its pushes as possibly public and scope commits/pushes accordingly.",
+      "- **Internal sharing / snippet hosting**: None configured — treat public paste/gist services as outside the trust boundary.",
+      "- **Secrets management**: None configured. Local `.env` (from `.env.example`) holds API tokens, admin credentials and test-account logins; these are local/test-only and must not be copied into docs, screenshots or logs.",
+      "- **Default / protected branches**: master (default branch); repo conventions also use main/master, develop, feature/*, fix/*.",
+      "- **CI/CD deploy targets**: None configured.",
+      "- **Network posture**: local development on a Windows workstation; Playwright targets local services only (API http://127.0.0.1:8000, H5 http://127.0.0.1:8080, admin http://127.0.0.1:8081) plus optional Laragon https://cloudapi.test/.",
+      "- **Host containment**: None configured — assume an ordinary developer machine with open internet. Instance-metadata credential paths and node/cluster credentials of any hosting layer are never task credentials here.",
+      "- **Source control**: The trusted repo and its remote(s) only — origin at https://codeup.aliyun.com/zkeduo/zkeduo_claude-code-workflow-kit.git (fetch/push). No additional orgs configured.",
+      "- **Trusted internal domains**: codeup.aliyun.com; local test hosts 127.0.0.1 (ports 8000/8080/8081) and cloudapi.test / mall.tp5.com.test (Laragon local dev).",
+      "- **Trusted cloud buckets**: None configured.",
+      "- **Key internal services**: Local test stack only — Laravel API (cloudApi) at http://127.0.0.1:8000, App/H5 at http://127.0.0.1:8080, admin console at http://127.0.0.1:8081, and the 掌客多商城 API (mall.tp5.com) via Laragon.",
+      "- **Internal package registry**: None configured — npm/yarn using public registries; do not mix package managers against an existing lockfile.",
+      "- **Sensitive data locations & audiences**: any file or store holding personal data, confidential business data, credentials, regulated data, or similarly sensitive material — notably `.env`/`.env.example`/`.env.test.example` token and admin-credential fields, and the CLAUDE.md test-account credentials (App 18721186620 / code 202604, admin henry/123456). Preserve exact handles when known and share only with audiences cleared at the [named+specifics] bar.",
+      "- **Data retention / declassification**: None configured.",
+      "- **Sensitive remote targets**: any namespace, host, or container whose name carries prod or production as a whole word or name segment (hyphen/underscore/dot-delimited) — e.g. matches prod-db, not producer. Note config/prod.ts is a sensitive-looking path.",
+      "- **Protected deployment namespaces / environments**: None configured — fall back to the Sensitive remote targets heuristic.",
+      "- **Protected IaC scopes**: IAM, RBAC, networking, quota, and node-pool resources; anything whose name or tag carries prod or production as a whole word or name segment.",
+      "### User-specific",
+      "- **Primary use of Claude Code**: software development — cross-repo requirements/design/test documentation and Playwright automation for the 掌客多 product family.",
+      "- **Trusted repo**: D:/Coding/zkeduo_claude-code-workflow-kit and its configured remote(s); other linked working copies (D:/laragon/www/*, D:/Coding/*) are reference targets for locating code, not additional trusted remotes unless the user says so.",
+      "- **Org-specific CLIs**: None configured beyond standard tooling (node/npm/yarn, php/composer, docker, Playwright via npx).",
+      "- **Routine local commands**: inside this repo, npm install / npm run install:browsers / npm test and npm run test:* / npm run report, and php artisan serve --host=127.0.0.1 --port=8000 in D:/laragon/www/cloudApi, are routine and local-only."
+    ]
+  }
 }
